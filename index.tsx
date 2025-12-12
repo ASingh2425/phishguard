@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from "react";
 import ReactDOM from "react-dom/client";
 import { GoogleGenAI } from "@google/genai";
@@ -6,12 +5,25 @@ import { GoogleGenAI } from "@google/genai";
 // --- Types ---
 
 type Verdict = "SAFE" | "SUSPICIOUS" | "MALICIOUS";
+type SpamCategory = "LEGITIMATE" | "MARKETING" | "NEWSLETTER" | "SCAM" | "UNKNOWN";
 
 interface AnalysisResult {
   verdict: Verdict;
   riskScore: number; // 0 to 100
   confidence: number; // 0 to 100
   summary: string;
+  spamAnalysis: {
+    isSpam: boolean;
+    spamScore: number; // 0-100
+    category: SpamCategory;
+    indicators: string[];
+  };
+  riskDimensions: {
+    technical: number; // 0-100
+    content: number; // 0-100
+    social: number; // 0-100
+    reputation: number; // 0-100
+  };
   technicalAnalysis: {
     domainReputation: string;
     authenticationChecks: string;
@@ -33,13 +45,6 @@ interface AnalysisResult {
 interface GroundingSource {
   title: string;
   uri: string;
-}
-
-interface HistoryItem extends AnalysisResult {
-  id: string;
-  timestamp: number;
-  preview: string;
-  groundingSources?: GroundingSource[];
 }
 
 // --- Sample Data for Simulation ---
@@ -91,7 +96,8 @@ const Icons = {
   Activity: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>,
   Terminal: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>,
   EyeOff: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>,
-  Lock: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+  Lock: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>,
+  AlertOctagon: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
 };
 
 // --- Styles ---
@@ -265,32 +271,6 @@ const styles = {
     transition: "transform 1s cubic-bezier(0.1, 1.2, 0.3, 1)",
     boxShadow: "0 0 5px rgba(255,255,255,0.8)"
   }),
-  statBarContainer: {
-    display: 'flex',
-    flexDirection: 'column' as const,
-    gap: '0.5rem',
-    marginTop: '1rem',
-  },
-  statBar: (percent: number, color: string) => ({
-    height: '24px',
-    width: '100%',
-    background: '#1a1a1a',
-    borderRadius: '4px',
-    overflow: 'hidden',
-    position: 'relative' as const,
-  }),
-  statBarFill: (percent: number, color: string) => ({
-    height: '100%',
-    width: `${percent}%`,
-    background: color,
-    display: 'flex',
-    alignItems: 'center',
-    paddingLeft: '0.5rem',
-    color: '#000',
-    fontSize: '0.75rem',
-    fontWeight: 'bold',
-    transition: 'width 1s ease-out'
-  }),
   ticker: {
     background: "#000",
     borderBottom: "1px solid var(--accent-cyber)",
@@ -341,6 +321,127 @@ const styles = {
     fontSize: "0.85rem",
     color: "var(--accent-cyber)"
   }
+};
+
+// --- Visualization Components ---
+
+const RiskRadar = ({ dimensions }: { dimensions: AnalysisResult['riskDimensions'] }) => {
+  // Center is 100,100, Radius 80
+  const c = 100;
+  const r = 80;
+  
+  // Calculate points
+  // Order: Technical (Top), Content (Right), Social (Bottom), Reputation (Left)
+  const p1 = `${c},${c - (dimensions.technical / 100) * r}`;
+  const p2 = `${c + (dimensions.content / 100) * r},${c}`;
+  const p3 = `${c},${c + (dimensions.social / 100) * r}`;
+  const p4 = `${c - (dimensions.reputation / 100) * r},${c}`;
+  
+  const polygonPoints = `${p1} ${p2} ${p3} ${p4}`;
+
+  return (
+    <div style={{ position: "relative", width: "200px", height: "200px", margin: "0 auto" }}>
+       <svg width="200" height="200" viewBox="0 0 200 200">
+         {/* Background Grid */}
+         <circle cx="100" cy="100" r="20" fill="none" stroke="#333" strokeDasharray="2,2"/>
+         <circle cx="100" cy="100" r="40" fill="none" stroke="#333" strokeDasharray="2,2"/>
+         <circle cx="100" cy="100" r="60" fill="none" stroke="#333" strokeDasharray="2,2"/>
+         <circle cx="100" cy="100" r="80" fill="none" stroke="#444" />
+         
+         {/* Axes */}
+         <line x1="100" y1="20" x2="100" y2="180" stroke="#333" />
+         <line x1="20" y1="100" x2="180" y2="100" stroke="#333" />
+         
+         {/* Labels */}
+         <text x="100" y="15" textAnchor="middle" fill="#888" fontSize="10">TECHNICAL</text>
+         <text x="190" y="105" textAnchor="start" fill="#888" fontSize="10">CONTENT</text>
+         <text x="100" y="195" textAnchor="middle" fill="#888" fontSize="10">SOCIAL</text>
+         <text x="10" y="105" textAnchor="end" fill="#888" fontSize="10">REPUTATION</text>
+         
+         {/* Data Polygon */}
+         <polygon points={polygonPoints} fill="rgba(0, 243, 255, 0.3)" stroke="var(--accent-cyber)" strokeWidth="2" />
+         <circle cx={c} cy={c - (dimensions.technical / 100) * r} r="3" fill="#fff" />
+         <circle cx={c + (dimensions.content / 100) * r} cy={c} r="3" fill="#fff" />
+         <circle cx={c} cy={c + (dimensions.social / 100) * r} r="3" fill="#fff" />
+         <circle cx={c - (dimensions.reputation / 100) * r} cy={c} r="3" fill="#fff" />
+       </svg>
+    </div>
+  );
+};
+
+const DonutChart = ({ data, title }: { data: { label: string, value: number, color: string }[], title: string }) => {
+  let accumulatedAngle = 0;
+  return (
+    <div style={{ textAlign: "center" }}>
+      <h4 style={{ color: "#aaa", fontSize: "0.9rem", marginBottom: "1rem" }}>{title}</h4>
+      <div style={{ position: "relative", width: "160px", height: "160px", margin: "0 auto" }}>
+        <svg width="100%" height="100%" viewBox="0 0 100 100" style={{ transform: "rotate(-90deg)" }}>
+          {data.map((slice, i) => {
+             const angle = (slice.value / 100) * 360;
+             const largeArc = angle > 180 ? 1 : 0;
+             const x = 50 + 40 * Math.cos((Math.PI * angle) / 180);
+             const y = 50 + 40 * Math.sin((Math.PI * angle) / 180);
+             
+             // SVG Path for arc
+             const pathData = `M 50 50 L 90 50 A 40 40 0 ${largeArc} 1 ${x} ${y} Z`;
+             
+             const rotation = `rotate(${accumulatedAngle} 50 50)`;
+             accumulatedAngle += angle;
+             
+             return (
+               <path key={i} d={pathData} fill={slice.color} transform={rotation} stroke="#0f0f0f" strokeWidth="2" />
+             );
+          })}
+          <circle cx="50" cy="50" r="25" fill="#0f0f0f" />
+        </svg>
+      </div>
+      <div style={{ marginTop: "1rem", display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "0.5rem" }}>
+        {data.map((slice, i) => (
+           <div key={i} style={{ display: "flex", alignItems: "center", fontSize: "0.7rem", color: "#ccc" }}>
+              <span style={{ width: "8px", height: "8px", background: slice.color, borderRadius: "50%", marginRight: "4px" }}></span>
+              {slice.label}
+           </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const TrendChart = () => {
+  // Simple polyline chart
+  return (
+    <div style={{ width: "100%", height: "150px", marginTop: "1rem", position: "relative" }}>
+       <svg width="100%" height="100%" viewBox="0 0 400 150" preserveAspectRatio="none">
+          {/* Grid lines */}
+          <line x1="0" y1="150" x2="400" y2="150" stroke="#333" strokeWidth="1" />
+          <line x1="0" y1="100" x2="400" y2="100" stroke="#222" strokeWidth="1" strokeDasharray="4,4" />
+          <line x1="0" y1="50" x2="400" y2="50" stroke="#222" strokeWidth="1" strokeDasharray="4,4" />
+          
+          {/* Spam Trend (Yellow) */}
+          <polyline 
+             points="0,120 50,110 100,125 150,90 200,80 250,95 300,70 350,60 400,50" 
+             fill="none" 
+             stroke="var(--accent-warning)" 
+             strokeWidth="2" 
+          />
+          
+          {/* Phishing Trend (Red) */}
+          <polyline 
+             points="0,140 50,135 100,130 150,120 200,110 250,90 300,40 350,45 400,30" 
+             fill="none" 
+             stroke="var(--accent-danger)" 
+             strokeWidth="2" 
+          />
+       </svg>
+       <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.7rem", color: "#666", marginTop: "0.5rem" }}>
+          <span>JAN</span><span>FEB</span><span>MAR</span><span>APR</span><span>MAY</span><span>JUN</span>
+       </div>
+       <div style={{ position: "absolute", top: "0", right: "0", display: "flex", gap: "1rem", fontSize: "0.7rem" }}>
+          <span style={{ color: "var(--accent-danger)" }}>● Phishing Attacks</span>
+          <span style={{ color: "var(--accent-warning)" }}>● Spam/Marketing</span>
+       </div>
+    </div>
+  );
 };
 
 // --- Sub-Components ---
@@ -398,6 +499,10 @@ const SystemStatusPanel = () => {
         <span><div style={styles.dot(true)}></div>Pixel Tracking Detect</span>
         <span style={{color: "var(--accent-safe)"}}>READY</span>
       </div>
+      <div style={styles.statusRow}>
+        <span><div style={styles.dot(true)}></div>Spam Classifier</span>
+        <span style={{color: "var(--accent-safe)"}}>READY</span>
+      </div>
 
       <div style={{ marginTop: "2rem" }}>
         <h4 style={{ fontSize: "0.8rem", color: "#666", marginBottom: "0.5rem" }}>NETWORK ACTIVITY</h4>
@@ -417,10 +522,11 @@ const SystemStatusPanel = () => {
       <div style={{ marginTop: "2rem", border: "1px dashed #333", padding: "1rem", borderRadius: "4px" }}>
         <div style={{ fontSize: "0.7rem", color: "#666", marginBottom: "0.5rem" }}>SYSTEM LOG</div>
         <div style={{ fontSize: "0.7rem", fontFamily: "monospace", color: "#444", lineHeight: "1.4" }}>
-          > Initializing sandbox...<br/>
-          > Loading zero-click exploit signatures...<br/>
-          > Parsing HTML for hidden iframes...<br/>
-          > Waiting for input stream...
+          {'>'} Initializing sandbox...<br/>
+          {'>'} Loading zero-click exploit signatures...<br/>
+          {'>'} Loading Spam heuristics (Bayesian)...<br/>
+          {'>'} Parsing HTML for hidden iframes...<br/>
+          {'>'} Waiting for input stream...
         </div>
       </div>
     </div>
@@ -509,17 +615,30 @@ const ScannerView = ({
           {result && (
             <>
             <div style={{ ...styles.card, borderColor: result.verdict === "SAFE" ? "var(--accent-safe)" : result.verdict === "SUSPICIOUS" ? "var(--accent-warning)" : "var(--accent-danger)" }}>
-               <h3 style={{ marginTop: 0, borderBottom: "1px solid #333", paddingBottom: "1rem", display: "flex", justifyContent: "space-between" }}>
+               <h3 style={{ marginTop: 0, borderBottom: "1px solid #333", paddingBottom: "1rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <span>ANALYSIS REPORT</span>
-                  <span style={{ 
-                    color: "#000", 
-                    background: result.verdict === "SAFE" ? "var(--accent-safe)" : result.verdict === "SUSPICIOUS" ? "var(--accent-warning)" : "var(--accent-danger)",
-                    padding: "0.2rem 0.5rem",
-                    borderRadius: "4px",
-                    fontSize: "0.8rem"
-                  }}>
-                    {result.verdict}
-                  </span>
+                  <div style={{ display: "flex", gap: "0.5rem" }}>
+                    <span style={{ 
+                      color: "#000", 
+                      background: result.spamAnalysis.isSpam ? "#aaa" : "var(--accent-cyber)",
+                      padding: "0.2rem 0.5rem",
+                      borderRadius: "4px",
+                      fontSize: "0.7rem",
+                      fontWeight: "bold"
+                    }}>
+                      {result.spamAnalysis.isSpam ? "SPAM" : "NOT SPAM"}
+                    </span>
+                    <span style={{ 
+                      color: "#000", 
+                      background: result.verdict === "SAFE" ? "var(--accent-safe)" : result.verdict === "SUSPICIOUS" ? "var(--accent-warning)" : "var(--accent-danger)",
+                      padding: "0.2rem 0.5rem",
+                      borderRadius: "4px",
+                      fontSize: "0.7rem",
+                      fontWeight: "bold"
+                    }}>
+                      {result.verdict}
+                    </span>
+                  </div>
                </h3>
 
                <div style={{ marginTop: "1.5rem" }}>
@@ -527,6 +646,18 @@ const ScannerView = ({
                   <p style={{ lineHeight: "1.6", color: "#ddd", fontSize: "0.9rem" }}>{result.summary}</p>
                </div>
                
+               {/* Spam Specifics */}
+               <div style={{ marginTop: "1rem", padding: "0.5rem", background: "#1a1a1a", borderRadius: "4px", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "0.8rem" }}>
+                  <span style={{color: "#888"}}>Classification: <strong style={{color: "#fff"}}>{result.spamAnalysis.category}</strong></span>
+                  <span style={{color: "#888"}}>Spam Score: <strong style={{color: result.spamAnalysis.spamScore > 50 ? "var(--accent-warning)" : "var(--accent-safe)"}}>{result.spamAnalysis.spamScore}/100</strong></span>
+               </div>
+
+               {/* Risk Radar */}
+               <div style={{ marginTop: "2rem", textAlign: "center" }}>
+                  <strong style={{ color: "var(--text-secondary)", fontSize: "0.8rem", letterSpacing: "1px" }}>RISK VECTOR RADAR</strong>
+                  <RiskRadar dimensions={result.riskDimensions} />
+               </div>
+
                {/* Passive Threat Section */}
                <div style={{ marginTop: "1.5rem", background: "rgba(255,255,255,0.05)", padding: "1rem", borderRadius: "4px", borderLeft: result.passiveAnalysis.hasTrackingPixels || result.passiveAnalysis.hasScriptsOrIframes ? "3px solid var(--accent-danger)" : "3px solid var(--accent-safe)" }}>
                  <strong style={{ color: "var(--text-secondary)", fontSize: "0.8rem", letterSpacing: "1px", display: "flex", alignItems: "center", gap: "0.5rem" }}>
@@ -541,24 +672,10 @@ const ScannerView = ({
                     {(!result.passiveAnalysis.hasTrackingPixels && !result.passiveAnalysis.hasScriptsOrIframes) && <span style={{fontSize: "0.7rem", color: "#000", background: "var(--accent-safe)", padding: "2px 6px", borderRadius: "2px"}}>NO PASSIVE TRIGGERS</span>}
                  </div>
                </div>
-
-               <div style={{ marginTop: "1.5rem" }}>
-                 <strong style={{ color: "var(--text-secondary)", fontSize: "0.8rem", letterSpacing: "1px" }}>WEB INTELLIGENCE</strong>
-                 <p style={{ fontSize: "0.9rem", color: "var(--accent-cyber)", margin: "0.5rem 0" }}>{result.webIntelligence}</p>
-                 {groundingSources.length > 0 && (
-                     <div style={{ fontSize: "0.8rem", borderLeft: "2px solid var(--accent-cyber)", paddingLeft: "0.5rem", marginTop: "0.5rem" }}>
-                       {groundingSources.map((s: any, i: number) => (
-                         <div key={i} style={{ marginBottom: "0.2rem" }}>
-                           <a href={s.uri} target="_blank" style={{ color: "#aaa", textDecoration: "none" }}>🔗 {s.title}</a>
-                         </div>
-                       ))}
-                     </div>
-                 )}
-               </div>
              </div>
 
              <div style={styles.card}>
-                <div style={{ textAlign: "center", marginBottom: "1rem", fontSize: "0.9rem", color: "#888" }}>RISK PROBABILITY</div>
+                <div style={{ textAlign: "center", marginBottom: "1rem", fontSize: "0.9rem", color: "#888" }}>PHISHING PROBABILITY</div>
                 <div style={styles.gaugeContainer}>
                   <div style={styles.gaugeBody(result.riskScore)}></div>
                   <div style={styles.gaugeNeedle(result.riskScore)}></div>
@@ -719,12 +836,18 @@ const EducationView = () => {
 
 const StatsView = () => {
   // Mock data for visualizations
-  const topTargets = [
-    { name: "Microsoft", percent: 35, color: "#00a4ef" },
-    { name: "Google", percent: 22, color: "#4285f4" },
-    { name: "Amazon", percent: 18, color: "#ff9900" },
-    { name: "Banks/Finance", percent: 15, color: "#00cc66" },
-    { name: "Logistics (DHL/FedEx)", percent: 10, color: "#ffcc00" }
+  const targetData = [
+    { label: "MICROSOFT", value: 35, color: "#00a4ef" },
+    { label: "GOOGLE", value: 25, color: "#4285f4" },
+    { label: "FINANCE", value: 20, color: "#00cc66" },
+    { label: "LOGISTICS", value: 12, color: "#ffcc00" },
+    { label: "OTHER", value: 8, color: "#666" }
+  ];
+
+  const methodData = [
+    { label: "CREDENTIAL HARVEST", value: 60, color: "var(--accent-danger)" },
+    { label: "MALWARE DELIVERY", value: 25, color: "var(--accent-warning)" },
+    { label: "BEC / FRAUD", value: 15, color: "var(--accent-cyber)" }
   ];
 
   return (
@@ -733,7 +856,7 @@ const StatsView = () => {
         GLOBAL PHISHING STATISTICS (2024-2025)
       </h2>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "3rem" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2rem" }}>
         
         {/* Top Targeted Brands */}
         <div style={styles.card}>
@@ -741,33 +864,40 @@ const StatsView = () => {
             <Icons.ChartBar /> MOST IMPERSONATED BRANDS
           </h3>
           <p style={{ color: "#888", fontSize: "0.9rem", marginBottom: "1.5rem" }}>
-            Attackers target trusted ecosystems to harvest credentials.
+            Sector breakdown of high-value targets.
           </p>
-          <div style={styles.statBarContainer}>
-            {topTargets.map((item, i) => (
-              <div key={i} style={{ marginBottom: "0.5rem" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem", marginBottom: "0.2rem", color: "#ccc" }}>
-                  <span>{item.name}</span>
-                  <span>{item.percent}%</span>
-                </div>
-                <div style={styles.statBar(item.percent, item.color)}>
-                  <div style={styles.statBarFill(item.percent, item.color)}></div>
-                </div>
-              </div>
-            ))}
-          </div>
+          <DonutChart data={targetData} title="TARGET DISTRIBUTION" />
         </div>
 
-        {/* Attack Vectors */}
+        {/* Attack Methods */}
         <div style={styles.card}>
           <h3 style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-            <Icons.Zap /> COMMON ATTACK TRIGGERS
+            <Icons.AlertOctagon /> ATTACK METHODOLOGY
           </h3>
           <p style={{ color: "#888", fontSize: "0.9rem", marginBottom: "1.5rem" }}>
-            The psychological levers used to make victims click.
+            Primary vectors used in successful breaches.
           </p>
-          
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "1rem" }}>
+          <DonutChart data={methodData} title="VECTOR ANALYSIS" />
+        </div>
+      </div>
+
+      {/* Trend Chart */}
+      <div style={{ ...styles.card, marginTop: "2rem" }}>
+          <h3 style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <Icons.Activity /> ATTACK VOLUME TRENDS (6 MONTHS)
+          </h3>
+          <p style={{ color: "#888", fontSize: "0.9rem", marginBottom: "1.5rem" }}>
+            Comparison of high-risk Phishing vs. general Spam/Marketing noise.
+          </p>
+          <TrendChart />
+      </div>
+
+      <div style={{ ...styles.card, marginTop: "2rem", display: "flex", gap: "2rem", alignItems: "center" }}>
+        <div style={{ flex: 1 }}>
+           <h3 style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+             <Icons.Zap /> COMMON PSYCHOLOGICAL TRIGGERS
+           </h3>
+           <div style={{ display: "flex", flexWrap: "wrap", gap: "1rem", marginTop: "1rem" }}>
             {[
               { label: "URGENCY", size: "2rem", opacity: 1, color: "var(--accent-danger)" },
               { label: "CURIOSITY", size: "1.5rem", opacity: 0.8, color: "var(--accent-warning)" },
@@ -790,15 +920,14 @@ const StatsView = () => {
               </span>
             ))}
           </div>
-
-          <div style={{ marginTop: "2rem", background: "#111", padding: "1rem", borderRadius: "8px", borderLeft: "4px solid var(--accent-cyber)" }}>
-             <strong style={{ color: "#fff" }}>DID YOU KNOW?</strong>
-             <p style={{ color: "#aaa", fontSize: "0.9rem", marginTop: "0.5rem" }}>
-               91% of all cyber attacks begin with a phishing email. The average employee receives 14 malicious emails per year.
-             </p>
-          </div>
         </div>
-
+        <div style={{ width: "1px", height: "150px", background: "#333" }}></div>
+        <div style={{ flex: 0.6, paddingLeft: "1rem" }}>
+             <strong style={{ color: "#fff", display: "block", marginBottom: "0.5rem" }}>DID YOU KNOW?</strong>
+             <p style={{ color: "#aaa", fontSize: "0.9rem", lineHeight: "1.6" }}>
+               91% of all cyber attacks begin with a phishing email. The average employee receives 14 malicious emails per year. Spam makes up 45% of all email traffic globally.
+             </p>
+        </div>
       </div>
     </div>
   );
@@ -833,26 +962,47 @@ function App() {
         You are a highly advanced cybersecurity defense system.
         
         TASK:
-        1. Analyze the provided email text for phishing indicators, social engineering, and technical anomalies.
-        2. SPECIFICALLY CHECK FOR PASSIVE THREATS:
+        1. DECODE THE INPUT: The input may contain raw MIME-encoded headers (e.g. '=?us-ascii?Q?...') or Base64 content. You MUST internally decode this to understand the true sender, subject, and body.
+        2. Analyze the decoded content for phishing indicators, social engineering, and technical anomalies.
+        3. SPAM CLASSIFICATION: Determine if this is Spam (unwanted marketing, newsletters) vs Phishing (malicious). 
+           - Assign a 'spamScore' (0-100) specifically for spam characteristics (unsub link, marketing language, bulk sender patterns).
+           - Categorize as: LEGITIMATE, MARKETING, NEWSLETTER, SCAM, or UNKNOWN.
+        4. SPECIFICALLY CHECK FOR PASSIVE THREATS:
            - Look for 'pixel trackers' (1x1 images from external domains).
            - Look for dangerous HTML tags like <script>, <iframe>, <object>, <embed>.
            - Look for suspicious attachment extensions in the text/headers (.exe, .scr, .vbs, .js).
-        3. Use Google Search to VERIFY the sender domain reputation, check for known scams matching the subject line, and validate any claims.
-        4. Determine a Verdict: SAFE, SUSPICIOUS, or MALICIOUS.
+        5. CALCULATE RISK DIMENSIONS (0-100):
+           - Technical: Header anomalies, SPF/DKIM (simulated), weird domains.
+           - Content: Spelling, layout, bad images.
+           - Social: Urgency, authority, fear tactics.
+           - Reputation: Sender domain quality, known blacklist (simulated/search).
+        6. Use Google Search to VERIFY the sender domain reputation, check for known scams matching the subject line, and validate any claims.
+        7. Determine a Verdict: SAFE, SUSPICIOUS, or MALICIOUS.
         
-        EMAIL CONTENT:
+        RAW EMAIL DATA (May include MIME encoded headers):
         """
         ${emailText}
         """
         
         OUTPUT FORMAT:
-        Return ONLY a raw JSON object with the following structure:
+        Return ONLY a raw JSON object. Do not wrap in markdown code blocks.
         {
           "verdict": "SAFE" | "SUSPICIOUS" | "MALICIOUS",
           "riskScore": number (0-100),
           "confidence": number (0-100),
           "summary": "Executive summary...",
+          "spamAnalysis": {
+            "isSpam": boolean,
+            "spamScore": number,
+            "category": "LEGITIMATE" | "MARKETING" | "NEWSLETTER" | "SCAM" | "UNKNOWN",
+            "indicators": ["Indicator 1", "Indicator 2"]
+          },
+          "riskDimensions": {
+            "technical": number,
+            "content": number,
+            "social": number,
+            "reputation": number
+          },
           "technicalAnalysis": {
             "domainReputation": "Findings...",
             "authenticationChecks": "Checks..."
@@ -882,18 +1032,31 @@ function App() {
       });
 
       const text = response.text || "";
-      const cleanJson = text.replace(/```json\n?|\n?```/g, "").trim();
+      
+      // Robust JSON Extraction: Find the first '{' and the last '}'
+      const firstOpen = text.indexOf('{');
+      const lastClose = text.lastIndexOf('}');
+      let cleanJson = text;
+      
+      if (firstOpen !== -1 && lastClose !== -1 && lastClose > firstOpen) {
+        cleanJson = text.substring(firstOpen, lastClose + 1);
+      }
+      
       let json: AnalysisResult;
       
       try {
         json = JSON.parse(cleanJson);
       } catch (e) {
         console.error("JSON Parse Error", e);
+        console.log("Raw Text:", text);
+        // Fallback object
         json = {
           verdict: "SUSPICIOUS",
           riskScore: 50,
           confidence: 0,
-          summary: "Error parsing model output. Raw text: " + text.substring(0, 100),
+          summary: "Error parsing model output. The model might have been confused by the raw headers. Please try cleaning the input or re-scanning.",
+          spamAnalysis: { isSpam: false, spamScore: 50, category: "UNKNOWN", indicators: [] },
+          riskDimensions: { technical: 50, content: 50, social: 50, reputation: 50 },
           technicalAnalysis: { domainReputation: "Unknown", authenticationChecks: "Unknown" },
           passiveAnalysis: { hasTrackingPixels: false, hasDangerousAttachments: false, hasScriptsOrIframes: false, details: "Analysis incomplete due to parsing error." },
           socialEngineering: { tacticsUsed: ["Error"], urgencyLevel: "MEDIUM" },
@@ -927,7 +1090,7 @@ function App() {
           <span>PhishGuard<span style={{ color: "var(--accent-cyber)" }}>.AI</span></span>
         </div>
         <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontFamily: "monospace" }}>
-          SYSTEM: ONLINE | v2.5
+          SYSTEM: ONLINE | v2.6.2
         </div>
       </header>
 
